@@ -10,11 +10,15 @@ const PORT = process.env.PORT || 5000;
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", "https://client-pos-frontend.vercel.app"],
+    origin: [
+      "http://localhost:3000",
+      "https://client-pos-frontend.vercel.app",
+      "https://cash-and-carry-pos.vercel.app",
+    ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-store-id"],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
