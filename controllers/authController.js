@@ -5,15 +5,27 @@ const jwt = require('jsonwebtoken');
 const loginUser = async (req, res) => {
     const { email, password } = req.body;
 
+    // Validation
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Please provide email and password' });
+    }
+
     try {
         const user = await User.findOne({ email });
 
         if (user && (await user.comparePassword(password))) {
+            const secret = process.env.JWT_SECRET;
+            
+            if (!secret) {
+                console.error('CRITICAL ERROR: JWT_SECRET is not defined in environment variables');
+                return res.status(500).json({ message: 'Server configuration error' });
+            }
+
             const token = jwt.sign({
                 id: user._id,
                 role: user.role,
-                store: user.store
-            }, process.env.JWT_SECRET, {
+                store: user.store ? user.store.toString() : null
+            }, secret, {
                 expiresIn: '30d'
             });
 
@@ -29,8 +41,12 @@ const loginUser = async (req, res) => {
             res.status(401).json({ message: 'Invalid email or password' });
         }
     } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Login error details:', {
+            message: error.message,
+            stack: error.stack,
+            body: { email } // Log only email for safety
+        });
+        res.status(500).json({ message: 'Server error during login' });
     }
 };
 
