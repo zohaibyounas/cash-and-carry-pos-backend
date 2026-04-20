@@ -147,22 +147,120 @@ const createPurchase = async (req, res) => {
 const updatePurchase = async (req, res) => {
   try {
     const purchase = await Purchase.findById(req.params.id);
-    if (purchase) {
-      purchase.vendorName = req.body.vendorName || purchase.vendorName;
-      purchase.totalAmount = req.body.totalAmount || purchase.totalAmount;
-      purchase.paidAmount = req.body.paidAmount || purchase.paidAmount;
-      purchase.balance = req.body.balance || purchase.balance;
+    if (!purchase)
+      return res.status(404).json({ message: "Purchase not found" });
 
-      if (req.file) {
-        purchase.billImage = `/uploads/${req.file.filename}`;
+    const storeId = getActiveStore(req);
+    if (!storeId)
+      return res.status(400).json({ message: "Store context required" });
+
+    // Revert stock and inventory changes from existing items
+    const oldItems = purchase.items || [];
+    for (const oldItem of oldItems) {
+      try {
+        const product = await Product.findById(oldItem.product);
+        if (product) {
+          const unitType = oldItem.unitType || "box";
+          let qtyToAdjust = Number(oldItem.quantity) || 0;
+          if (unitType === "box" && product.hasPieces) {
+            qtyToAdjust = qtyToAdjust * (product.piecesPerBox || 1);
+          }
+
+          product.totalStock = (product.totalStock || 0) - qtyToAdjust;
+          await product.save();
+
+          const warehouseId = oldItem.warehouse || oldItem.warehouseId;
+          if (warehouseId) {
+            const inventory = await Inventory.findOne({
+              product: oldItem.product,
+              warehouse: warehouseId,
+            });
+            if (inventory) {
+              inventory.quantity = (inventory.quantity || 0) - qtyToAdjust;
+              await inventory.save();
+            }
+          }
+        }
+      } catch (inner) {
+        console.error("Error reverting old item stock", inner);
       }
-
-      const updatedPurchase = await purchase.save();
-      res.json(updatedPurchase);
-    } else {
-      res.status(404).json({ message: "Purchase not found" });
     }
+
+    // Parse incoming items (support form-data string or JSON body)
+    const newItems = req.body.items
+      ? typeof req.body.items === "string"
+        ? JSON.parse(req.body.items)
+        : req.body.items
+      : [];
+
+    // Update basic fields
+    purchase.vendorName = req.body.vendorName || purchase.vendorName;
+    purchase.totalAmount =
+      req.body.totalAmount !== undefined
+        ? req.body.totalAmount
+        : purchase.totalAmount;
+    purchase.paidAmount =
+      req.body.paidAmount !== undefined
+        ? req.body.paidAmount
+        : purchase.paidAmount;
+    purchase.balance =
+      req.body.balance !== undefined ? req.body.balance : purchase.balance;
+    if (req.file) purchase.billImage = `/uploads/${req.file.filename}`;
+    purchase.items = newItems;
+
+    const updatedPurchase = await purchase.save();
+
+    // Apply new items: update product prices, add stock and inventory
+    if (newItems && newItems.length) {
+      for (const item of newItems) {
+        try {
+          const product = await Product.findById(item.product);
+          if (product) {
+            const unitType = item.unitType || "box";
+            if (unitType === "piece") {
+              product.pieceCostPrice = Number(item.costPrice);
+            } else {
+              product.costPrice = Number(item.costPrice);
+            }
+            await product.save();
+
+            let qtyToAdd = Number(item.quantity) || 0;
+            if (unitType === "box" && product.hasPieces) {
+              qtyToAdd = qtyToAdd * (product.piecesPerBox || 1);
+            }
+
+            product.totalStock = (product.totalStock || 0) + qtyToAdd;
+            await product.save();
+
+            const warehouseId = item.warehouse || item.warehouseId;
+            if (warehouseId) {
+              const inventory = await Inventory.findOne({
+                product: item.product,
+                warehouse: warehouseId,
+              });
+              if (inventory) {
+                inventory.quantity = (inventory.quantity || 0) + qtyToAdd;
+                await inventory.save();
+              } else {
+                await Inventory.create({
+                  product: item.product,
+                  warehouse: warehouseId,
+                  quantity: qtyToAdd,
+                });
+              }
+
+              await syncProductTotalStock(item.product);
+            }
+          }
+        } catch (inner) {
+          console.error("Error applying new item", inner);
+        }
+      }
+    }
+
+    res.json(updatedPurchase);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: "Server error" });
   }
 };
