@@ -1,3 +1,5 @@
+const moment = require("moment-timezone");
+moment.tz.setDefault("Asia/Karachi");
 const mongoose = require('mongoose');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
@@ -22,9 +24,12 @@ const getDashboardStats = async (req, res) => {
 
         let dateFilter = { store: storeObjectId };
         if (startDate && endDate) {
+            // Using Asia/Karachi default timezone set above
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
             dateFilter.createdAt = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
+                $gte: start,
+                $lte: end
             };
         }
 
@@ -100,7 +105,7 @@ const getDashboardStats = async (req, res) => {
                 $group: {
                     _id: {
                         id: "$_id",
-                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }
+                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "+05:00" } }
                     },
                     totalAmount: { $first: "$totalAmount" },
                     cost: { $sum: { $multiply: [{ $ifNull: ["$items.costPrice", 0] }, { $ifNull: ["$items.quantity", 0] }] } }
@@ -121,7 +126,7 @@ const getDashboardStats = async (req, res) => {
             { $match: { createdAt: { $gte: sevenDaysAgo }, store: storeObjectId } },
             {
                 $group: {
-                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "+05:00" } },
                     purchases: { $sum: "$totalAmount" }
                 }
             },
@@ -133,7 +138,7 @@ const getDashboardStats = async (req, res) => {
         for (let i = 6; i >= 0; i--) {
             const d = new Date();
             d.setUTCDate(d.getUTCDate() - i);
-            const ds = d.toISOString().split('T')[0];
+            const ds = moment(d).format('YYYY-MM-DD');
 
             const sT = salesTrend.find(t => t._id === ds) || { sales: 0, profit: 0 };
             const pT = purchaseTrend.find(t => t._id === ds) || { purchases: 0 };
@@ -146,7 +151,7 @@ const getDashboardStats = async (req, res) => {
             });
         }
 
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = moment().format('YYYY-MM-DD');
         const todayData = trend.find(t => t.date === todayStr) || { sales: 0, profit: 0 };
 
         res.json({
@@ -178,7 +183,13 @@ const getSalesReport = async (req, res) => {
 
         let dateFilter = { store: storeId };
         if (startDate && endDate) {
-            dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+            // Using Asia/Karachi default timezone set above
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
+            dateFilter.createdAt = {
+                $gte: start,
+                $lte: end
+            };
         }
 
         const sales = await Sale.find(dateFilter)
@@ -248,9 +259,12 @@ const getPnLReport = async (req, res) => {
 
         let dateFilter = { store: storeObjectId };
         if (startDate && endDate) {
+            // Using Asia/Karachi default timezone set above
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
             dateFilter.createdAt = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
+                $gte: start,
+                $lte: end
             };
         }
 
@@ -298,7 +312,13 @@ const getInventoryInvoices = async (req, res) => {
 
         let dateFilter = { store: storeId };
         if (startDate && endDate) {
-            dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+            // Using Asia/Karachi default timezone set above
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
+            dateFilter.createdAt = {
+                $gte: start,
+                $lte: end
+            };
         }
 
         const purchases = await Purchase.find(dateFilter)
@@ -320,9 +340,12 @@ const getFinancialReport = async (req, res) => {
 
         let dateFilter = { store: storeObjectId };
         if (startDate && endDate) {
+            // Using Asia/Karachi default timezone set above
+            const start = moment(startDate).startOf('day').toDate();
+            const end = moment(endDate).endOf('day').toDate();
             dateFilter.createdAt = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
+                $gte: start,
+                $lte: end
             };
         }
 
@@ -333,8 +356,9 @@ const getFinancialReport = async (req, res) => {
             {
                 $group: {
                     _id: {
-                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-                        saleId: "$_id"
+                        date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "+05:00" } },
+                        saleId: "$_id",
+                        paymentMethod: { $ifNull: ["$paymentMethod", "cash"] }
                     },
                     totalAmount: { $first: "$totalAmount" },
                     cost: { $sum: { $multiply: [{ $ifNull: ["$items.costPrice", 0] }, { $ifNull: ["$items.quantity", 0] }] } }
@@ -342,9 +366,22 @@ const getFinancialReport = async (req, res) => {
             },
             {
                 $group: {
-                    _id: "$_id.date",
+                    _id: { date: "$_id.date", paymentMethod: "$_id.paymentMethod" },
                     sales: { $sum: "$totalAmount" },
                     profit: { $sum: { $subtract: ["$totalAmount", "$cost"] } }
+                }
+            },
+            {
+                $group: {
+                    _id: "$_id.date",
+                    sales: { $sum: "$sales" },
+                    profit: { $sum: "$profit" },
+                    methods: {
+                        $push: {
+                            method: "$_id.paymentMethod",
+                            amount: "$sales"
+                        }
+                    }
                 }
             }
         ]);
@@ -354,7 +391,7 @@ const getFinancialReport = async (req, res) => {
             { $match: dateFilter },
             {
                 $group: {
-                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "+05:00" } },
                     purchases: { $sum: "$totalAmount" }
                 }
             }
@@ -365,7 +402,7 @@ const getFinancialReport = async (req, res) => {
             { $match: dateFilter },
             {
                 $group: {
-                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "+05:00" } },
                     expenses: { $sum: "$amount" }
                 }
             }
@@ -379,13 +416,25 @@ const getFinancialReport = async (req, res) => {
         ]);
 
         const summary = Array.from(dates).map(date => {
-            const s = dailySales.find(d => d._id === date) || { sales: 0, profit: 0 };
+            const s = dailySales.find(d => d._id === date) || { sales: 0, profit: 0, methods: [] };
             const p = dailyPurchases.find(d => d._id === date) || { purchases: 0 };
             const e = dailyExpenses.find(d => d._id === date) || { expenses: 0 };
+
+            let cash = 0, card = 0, bankTransfer = 0;
+            if (s.methods) {
+                s.methods.forEach(m => {
+                    if (m.method === 'cash') cash += m.amount;
+                    if (m.method === 'card') card += m.amount;
+                    if (m.method === 'bank_transfer') bankTransfer += m.amount;
+                });
+            }
 
             return {
                 date,
                 sales: s.sales || 0,
+                cashSales: cash,
+                cardSales: card,
+                bankTransferSales: bankTransfer,
                 purchases: p.purchases || 0,
                 expenses: e.expenses || 0,
                 profit: s.profit || 0,
