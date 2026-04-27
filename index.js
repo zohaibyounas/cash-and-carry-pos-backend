@@ -14,6 +14,7 @@ app.use(
       "http://localhost:3000",
       "https://client-pos-frontend.vercel.app",
       "https://cash-and-carry-pos.vercel.app",
+      "https://www.mustafa-ss.shop",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-store-id"],
