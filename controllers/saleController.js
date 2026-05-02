@@ -546,10 +546,199 @@ const updateSale = async (req, res) => {
   }
 };
 
+// @desc    Process a sale return or exchange
+// @route   POST /api/sales/return
+const processReturn = async (req, res) => {
+  const {
+    originalSaleId,
+    itemsToReturn, // Array of { product, quantity, unitType, price, costPrice }
+    itemsToAdd, // Array of { product, quantity, unitType, price, costPrice }
+    totalReturnAmount,
+    totalNewAmount,
+    netAmount, // totalNewAmount - totalReturnAmount
+    paidAmount, // additional cash from customer or refund to customer
+    paymentMethod,
+    remarks,
+  } = req.body;
+
+  try {
+    const originalSale = await Sale.findById(originalSaleId);
+    if (!originalSale) {
+      return res.status(404).json({ message: "Original sale not found" });
+    }
+
+    const type = itemsToAdd && itemsToAdd.length > 0 ? "exchange" : "return";
+    const prefix = type === "return" ? "RET-" : "EXC-";
+    const invoiceId = `${prefix}${Date.now()}`;
+
+    // Enrich items and check stock
+    const processedItems = [];
+
+    // 1. Handle Returned Items (Add back to stock)
+    for (const item of itemsToReturn) {
+      const product = await Product.findById(item.product);
+      if (!product) continue;
+
+      let unitsToReturn = Number(item.quantity);
+      if (item.unitType === "box" && product.hasPieces) {
+        unitsToReturn = Number(item.quantity) * (product.piecesPerBox || 1);
+      }
+
+      // Increment stock
+      product.totalStock = Number(product.totalStock) + unitsToReturn;
+      await product.save();
+
+      // Find inventory to update
+      let inventory = await Inventory.findOne({
+        product: item.product,
+      }).populate("warehouse");
+      if (inventory) {
+        inventory.quantity = Number(inventory.quantity) + unitsToReturn;
+        await inventory.save();
+      }
+
+      processedItems.push({
+        product: item.product,
+        quantity: -item.quantity, // Negative for return
+        costPrice: item.costPrice || product.costPrice,
+        price: item.price,
+        total: -(item.price * item.quantity),
+        unitType: item.unitType || "box",
+        store: product.store,
+      });
+    }
+
+    // 2. Handle New Items (Subtract from stock)
+    if (itemsToAdd && itemsToAdd.length > 0) {
+      for (const item of itemsToAdd) {
+        const product = await Product.findById(item.product);
+        if (!product) continue;
+
+        let unitsToDeduct = Number(item.quantity);
+        if (item.unitType === "box" && product.hasPieces) {
+          unitsToDeduct = Number(item.quantity) * (product.piecesPerBox || 1);
+        }
+
+        if (product.totalStock < unitsToDeduct) {
+          return res.status(400).json({
+            message: `Insufficient stock for product: ${product.name}`,
+          });
+        }
+
+        // Decrement stock
+        product.totalStock = Number(product.totalStock) - unitsToDeduct;
+        await product.save();
+
+        let inventory = await Inventory.findOne({
+          product: item.product,
+          quantity: { $gt: 0 },
+        }).populate("warehouse");
+        if (!inventory) {
+          inventory = await Inventory.findOne({
+            product: item.product,
+          }).populate("warehouse");
+        }
+
+        if (inventory) {
+          inventory.quantity = Number(inventory.quantity) - unitsToDeduct;
+          await inventory.save();
+        }
+
+        processedItems.push({
+          product: item.product,
+          quantity: item.quantity,
+          costPrice: product.costPrice,
+          price: item.price,
+          total: item.price * item.quantity,
+          unitType: item.unitType || "box",
+          store: product.store,
+        });
+      }
+    }
+
+    const returnSale = new Sale({
+      store: originalSale.store,
+      salesman: req.user.id,
+      items: processedItems,
+      subtotal: netAmount,
+      totalAmount: netAmount,
+      paidAmount: paidAmount || 0,
+      invoiceId,
+      type,
+      customer: originalSale.customer,
+      retailer: originalSale.retailer,
+      customerName: originalSale.customerName,
+      customerPhone: originalSale.customerPhone,
+      customerAddress: originalSale.customerAddress,
+      referenceNo: `REF-${originalSale.invoiceId}`,
+      remarks: remarks || `${type === "return" ? "Return" : "Exchange"} for ${originalSale.invoiceId}`,
+      paymentMethod: paymentMethod || "cash",
+      paymentStatus: paidAmount >= netAmount ? "paid" : "partial",
+    });
+
+    const createdReturn = await returnSale.save();
+
+    // 4. Update Customer Balance
+    if (originalSale.customer) {
+      const cust = await Customer.findById(originalSale.customer);
+      if (cust) {
+        cust.balance += netAmount;
+        cust.transactions.push({
+          type: type,
+          amount: netAmount,
+          sale: createdReturn._id,
+          description: `${type === "return" ? "Return" : "Exchange"} for ${originalSale.invoiceId}`,
+        });
+        if (paidAmount !== 0) {
+          cust.balance -= paidAmount;
+          cust.transactions.push({
+            type: "payment",
+            amount: paidAmount,
+            sale: createdReturn._id,
+            description: `Payment/Refund for ${invoiceId}`,
+          });
+        }
+        await cust.save();
+      }
+    }
+
+    // 5. Update Retailer Balance (if applicable)
+    if (originalSale.retailer) {
+      const ret = await Retailer.findById(originalSale.retailer);
+      if (ret) {
+        ret.transactions.push({
+          type: "sale", // Use 'sale' for return/exchange as it impacts balance similarly
+          amount: netAmount,
+          sale: createdReturn._id,
+          description: `${type === "return" ? "Return" : "Exchange"} for ${originalSale.invoiceId}`,
+        });
+        if (paidAmount !== 0) {
+          ret.transactions.push({
+            type: "payment",
+            amount: paidAmount,
+            sale: createdReturn._id,
+            description: `Payment/Refund for ${invoiceId}`,
+          });
+        }
+        
+        // Simple balance update
+        ret.balance += (netAmount - (paidAmount || 0));
+        await ret.save();
+      }
+    }
+
+    res.status(201).json(createdReturn);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   createSale,
   getSales,
   deleteSale,
   convertQuoteToInvoice,
   updateSale,
+  processReturn,
 };

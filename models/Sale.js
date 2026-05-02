@@ -31,7 +31,7 @@ const saleSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['invoice', 'quotation', 'estimate'],
+        enum: ['invoice', 'quotation', 'estimate', 'return', 'exchange'],
         default: 'invoice'
     },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },

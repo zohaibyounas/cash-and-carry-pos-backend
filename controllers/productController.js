@@ -12,10 +12,10 @@ const getActiveStore = (req) => {
 const getProducts = async (req, res) => {
   try {
     const { allStores, storeId: queryStoreId } = req.query;
-    
+
     // Use query param storeId if provided, otherwise use active store
     const storeId = queryStoreId || getActiveStore(req);
-    
+
     if (!storeId && allStores !== "true") {
       return res.status(400).json({ message: "Store context required" });
     }
@@ -57,6 +57,7 @@ const createProduct = async (req, res) => {
     vendor,
     description,
     warehouseId,
+    criticalThreshold,
     hasPieces,
     piecesPerBox,
     pieceCostPrice,
@@ -80,11 +81,9 @@ const createProduct = async (req, res) => {
         store: storeId,
       });
       if (exists) {
-        return res
-          .status(400)
-          .json({
-            message: "Product with this barcode already exists in this store",
-          });
+        return res.status(400).json({
+          message: "Product with this barcode already exists in this store",
+        });
       }
     }
 
@@ -95,6 +94,8 @@ const createProduct = async (req, res) => {
       salePrice: Number(salePrice),
       discount: Number(discount) || 0,
       totalStock: initialStock, // Save the stock value
+      criticalThreshold:
+        criticalThreshold !== undefined ? Number(criticalThreshold) : undefined,
       category,
       vendor,
       description,
@@ -104,8 +105,8 @@ const createProduct = async (req, res) => {
       piecesPerBox: Math.max(1, Number(piecesPerBox) || 1),
       pieceCostPrice: Number(pieceCostPrice) || 0,
       pieceSalePrice: Number(pieceSalePrice) || 0,
-      unitName: unitName || 'Box',
-      pieceName: pieceName || 'Piece',
+      unitName: unitName || "Box",
+      pieceName: pieceName || "Piece",
     };
 
     // ONLY add barcode if provided
@@ -119,17 +120,24 @@ const createProduct = async (req, res) => {
     // ===== INVENTORY =====
     // ONLY create inventory if both stock AND warehouse are provided
     if (initialStock > 0 && warehouseId) {
-      console.log('Creating inventory - Product:', createdProduct._id, 'Warehouse:', warehouseId, 'Stock:', initialStock);
+      console.log(
+        "Creating inventory - Product:",
+        createdProduct._id,
+        "Warehouse:",
+        warehouseId,
+        "Stock:",
+        initialStock,
+      );
       await Inventory.create({
         product: createdProduct._id,
         warehouse: warehouseId,
         quantity: Number(initialStock),
       });
-      console.log('Inventory created successfully!');
-      
+      console.log("Inventory created successfully!");
+
       await syncProductTotalStock(createdProduct._id);
     } else if (initialStock > 0 && !warehouseId) {
-      console.log('Stock provided but no warehouse - inventory NOT created');
+      console.log("Stock provided but no warehouse - inventory NOT created");
     }
 
     res.status(201).json(createdProduct);
@@ -151,6 +159,7 @@ const updateProduct = async (req, res) => {
     category,
     vendor,
     description,
+    criticalThreshold,
     hasPieces,
     piecesPerBox,
     pieceCostPrice,
@@ -194,12 +203,28 @@ const updateProduct = async (req, res) => {
     product.category = category ?? product.category;
     product.vendor = vendor ?? product.vendor;
     product.description = description ?? product.description;
-    product.hasPieces = hasPieces !== undefined ? (hasPieces === "true" || hasPieces === true) : product.hasPieces;
-    product.piecesPerBox = piecesPerBox !== undefined ? Math.max(1, Number(piecesPerBox)) : product.piecesPerBox;
-    product.pieceCostPrice = pieceCostPrice !== undefined ? Number(pieceCostPrice) : product.pieceCostPrice;
-    product.pieceSalePrice = pieceSalePrice !== undefined ? Number(pieceSalePrice) : product.pieceSalePrice;
+    product.hasPieces =
+      hasPieces !== undefined
+        ? hasPieces === "true" || hasPieces === true
+        : product.hasPieces;
+    product.piecesPerBox =
+      piecesPerBox !== undefined
+        ? Math.max(1, Number(piecesPerBox))
+        : product.piecesPerBox;
+    product.pieceCostPrice =
+      pieceCostPrice !== undefined
+        ? Number(pieceCostPrice)
+        : product.pieceCostPrice;
+    product.pieceSalePrice =
+      pieceSalePrice !== undefined
+        ? Number(pieceSalePrice)
+        : product.pieceSalePrice;
     product.unitName = unitName ?? product.unitName;
     product.pieceName = pieceName ?? product.pieceName;
+    product.criticalThreshold =
+      criticalThreshold !== undefined
+        ? Number(criticalThreshold)
+        : product.criticalThreshold;
 
     // Barcode handling (IMPORTANT)
     if (barcode !== undefined) {
